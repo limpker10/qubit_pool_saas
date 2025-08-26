@@ -36,7 +36,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('cash_sessions/list',             [CashSessionController::class, 'index']);
     Route::get('cash_sessions/{cashSession}',    [CashSessionController::class, 'show']);
-    Route::get('cash_sessions/current',          [CashSessionController::class, 'current']);
+    Route::get('cash_session/current',          [CashSessionController::class, 'current']);
     Route::post('cash_sessions/open',            [CashSessionController::class, 'open']);
     Route::post('cash_sessions/{session}/close', [CashSessionController::class, 'close']);
     Route::get('cash_sessions/{session}/movements',  [CashSessionController::class, 'movements']);
@@ -47,4 +47,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('tables/{table}/resume', [PoolTableController::class, 'resume']);
     Route::post('tables/{table}/finish', [PoolTableController::class, 'finish']);
     Route::post('tables/{table}/cancel', [PoolTableController::class, 'cancel']);
+
+    Route::post('tables/{table}/cover', [PoolTableController::class, 'uploadCover']);
+    Route::delete('tables/{table}/cover', [PoolTableController::class, 'destroyCover']);
 });

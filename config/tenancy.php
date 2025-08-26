@@ -17,7 +17,7 @@ return [
      * Only relevant if you're using the domain or subdomain identification middleware.
      */
     'central_domains' => [
-        'saas-app.test',
+        'qubit_pool_saas.test',
         '127.0.0.1',
         'localhost',
     ],

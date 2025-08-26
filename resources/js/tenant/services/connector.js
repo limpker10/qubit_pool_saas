@@ -45,25 +45,35 @@ export const setToken = (token) => {
     }
 };
 
-const call = async (method, endpoint, data = {}) => {
-    switch (method) {
-        case 'get': return caller.get(endpoint, { params: data });
-        case 'post': return caller.post(endpoint, data);
-        case 'put': return caller.put(endpoint, data);
-        case 'delete': return caller.delete(endpoint, { data });
-        default: throw new Error(`[callAPI] Método HTTP no soportado: ${method}`);
+const call = async (method, endpoint, data = {}, isMultipart = false) => {
+    const config = {
+        headers: {}
+    };
+
+    if (isMultipart) {
+        config.headers['Content-Type'] = 'multipart/form-data';
+    }
+
+    switch (method.toLowerCase()) {
+        case 'get':
+            return caller.get(endpoint, {  params: data });
+        case 'post':
+            return caller.post(endpoint, data, config);
+        case 'put':
+            return caller.put(endpoint, data, config);
+        case 'delete':
+            return caller.delete(endpoint, { ...config, data });
+        default:
+            throw new Error(`[callAPI] Método HTTP no soportado: ${method}`);
     }
 };
-
 const callAPI = async (method, endpoint, options = {}) => {
     try {
-        // Si fueras a usar cookies/CSRF, aquí harías el csrf-cookie.
-        // if (options.csrf_cookie) await caller.get('/sanctum/csrf-cookie');
-
-        const response = await call(method, endpoint, options.data);
-        return response.data; // <- Devuelve SOLO el body
+        const { data = {}, isMultipart = false } = options;
+        const response = await call(method, endpoint, data, isMultipart);
+        return response.data;
     } catch (error) {
-        console.error(`[callAPI] Error en "${method.toUpperCase()} ${endpoint}"`, error.response || error.message);
+        console.error(`[callAPI] Error en ${method.toUpperCase()} ${endpoint}`, error.response?.data || error.message);
         throw error;
     }
 };

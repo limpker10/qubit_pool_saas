@@ -92,21 +92,21 @@
                 <!-- Tiempo -->
                 <v-col cols="12" sm="4" class="py-3">
                     <v-icon size="20" color="info" class="mb-1">mdi-timer-outline</v-icon>
-                    <div class="text-caption text-medium-emphasis">Tiempo</div>
+<!--                    <div class="text-caption text-medium-emphasis">Tiempo</div>-->
                     <div class="text-body-1 font-weight-medium">{{ formattedTime  || '—' }}</div>
                 </v-col>
 
                 <!-- Importe -->
                 <v-col cols="12" sm="4" class="py-3">
                     <v-icon size="20" color="success" class="mb-1">mdi-cash</v-icon>
-                    <div class="text-caption text-medium-emphasis">Importe</div>
+<!--                    <div class="text-caption text-medium-emphasis">Importe</div>-->
                     <div class="text-body-1 font-weight-medium">{{ formattedAmount }}</div>
                 </v-col>
 
                 <!-- Consumo -->
                 <v-col cols="12" sm="4" class="py-3">
                     <v-icon size="20" color="primary" class="mb-1">mdi-food</v-icon>
-                    <div class="text-caption text-medium-emphasis">Consumo</div>
+<!--                    <div class="text-caption text-medium-emphasis">Consumo</div>-->
                     <div class="text-body-1 font-weight-medium">{{ formattedConsumption }}</div>
                 </v-col>
             </v-row>

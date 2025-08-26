@@ -218,7 +218,7 @@ export default {
 
     data() {
         return {
-            baseDomain: "saas-app.test", // para UI (el backend usa su config)
+            baseDomain: "qubit_pool_saas.test", // para UI (el backend usa su config)
             loading: false,
             loadingSave: false,
             error: null,

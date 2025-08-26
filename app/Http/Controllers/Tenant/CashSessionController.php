@@ -5,6 +5,7 @@ use App\Models\Tenant\CashSession;
 use App\Models\Tenant\CashMovement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class CashSessionController extends Controller
@@ -71,6 +72,7 @@ class CashSessionController extends Controller
     /** Retorna la sesión abierta actual del usuario + movimientos */
     public function current(Request $request)
     {
+        Log::info(request()->all());
         $userId = $request->user()->id;
         $session = CashSession::where('user_id', $userId)
             ->where('status', 'open')

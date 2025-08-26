@@ -79,6 +79,7 @@ const PATHS = {
         DELETE: (id) => `api/tables/${id}`,   // DELETE: eliminar cliente
         START: (id) => `api/tables/${id}/start`,   // DELETE: eliminar cliente
         FINISH: (id) => `api/tables/${id}/finish`,   // DELETE: eliminar cliente
+        IMAGE:  (id) => `api/tables/${id}/cover`,   // DELETE: eliminar cliente
     },
 };
 

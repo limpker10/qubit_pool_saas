@@ -148,6 +148,10 @@ const API = {
         finish(id,data) {
             return callAPI('post', PATHS.pool_tables.FINISH(id),{data});
         },
+        images(id,data) {
+            const isFormData = data instanceof FormData;
+            return callAPI('post', PATHS.pool_tables.IMAGE(id),{data, isMultipart: isFormData});
+        },
     },
 };
 

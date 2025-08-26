@@ -11,8 +11,10 @@ use App\Models\Tenant\Service;
 use App\Models\Tenant\TableRental;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
-
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Validator;
 class PoolTableController extends Controller
 {
     /** GET /api/tables */
@@ -272,12 +274,12 @@ class PoolTableController extends Controller
         $globalWarehouseId  = $request->integer('warehouse_id') ?: null;
         $allowNegativeStock = $request->boolean('allow_negative_stock', false);
 
-        return \DB::transaction(function () use ($table, $data, $items, $globalWarehouseId, $allowNegativeStock) {
+        return DB::transaction(function () use ($table, $data, $items, $globalWarehouseId, $allowNegativeStock) {
             // Relee y bloquea la mesa
-            $table = \App\Models\PoolTable::whereKey($table->getKey())->lockForUpdate()->firstOrFail();
+            $table = PoolTable::whereKey($table->getKey())->lockForUpdate()->firstOrFail();
 
             // Debe existir un alquiler abierto
-            $rental = \App\Models\TableRental::where('table_id', $table->id)
+            $rental = TableRental::where('table_id', $table->id)
                 ->where('status', 'open')
                 ->lockForUpdate()
                 ->first();
@@ -295,8 +297,8 @@ class PoolTableController extends Controller
                 $table->rate_per_hour = (float) $data['rate_per_hour'];
             }
 
-            $billableMins = $table->computeBillableMinutes($now, \App\Models\PoolTable::ROUND_BLOCK_MIN);
-            $amountTime   = $table->computeAmount($now, \App\Models\PoolTable::ROUND_BLOCK_MIN); // solo tiempo
+            $billableMins = $table->computeBillableMinutes($now, PoolTable::ROUND_BLOCK_MIN);
+            $amountTime   = $table->computeAmount($now, PoolTable::ROUND_BLOCK_MIN); // solo tiempo
 
             if (method_exists($table, 'isFillable') && $table->isFillable('final_seconds')) $table->final_seconds = $billableMins * 60;
             if (method_exists($table, 'isFillable') && $table->isFillable('final_amount'))  $table->final_amount  = $amountTime;
@@ -327,7 +329,7 @@ class PoolTableController extends Controller
             $rental->save();
 
             // 1.c) Dejar mesa disponible nuevamente
-            $table->setStatusByName(\App\Models\PoolTable::ST_AVAILABLE);
+            $table->setStatusByName(PoolTable::ST_AVAILABLE);
             $table->save();
 
             // 2) Totales para el documento
@@ -340,7 +342,7 @@ class PoolTableController extends Controller
             $cashSessionId = null;
 
             if ($method === 'cash') {
-                $session = \App\Models\CashSession::currentFor(auth()->id());
+                $session = CashSession::currentFor(auth()->id());
                 if (!$session) {
                     return response()->json(['message' => 'Debes abrir caja antes de cobrar en efectivo'], 422);
                 }
@@ -349,7 +351,7 @@ class PoolTableController extends Controller
 
             // 4) Correlativo de Nota de Venta
             $series     = 'NV01';
-            $lastNumber = \App\Models\Document::where('type', 'sale_note')
+            $lastNumber = Document::where('type', 'sale_note')
                 ->where('series', $series)
                 ->lockForUpdate()
                 ->orderByDesc('number')
@@ -357,7 +359,7 @@ class PoolTableController extends Controller
             $nextNumber = $lastNumber + 1;
 
             // 5) Crear documento (Nota de Venta)
-            $doc = \App\Models\Document::create([
+            $doc = Document::create([
                 'type'            => 'sale_note',
                 'series'          => $series,
                 'number'          => $nextNumber,
@@ -377,9 +379,9 @@ class PoolTableController extends Controller
             ]);
 
             // 6) Detalles del documento
-            $serviceId = optional(\App\Models\Service::where('code', 'POOL_TIME')->first())->id;
+            $serviceId = optional(Service::where('code', 'POOL_TIME')->first())->id;
 
-            \App\Models\DocumentDetail::create([
+            DocumentDetail::create([
                 'document_id' => $doc->id,
                 'description' => "Alquiler mesa #{$table->number} ({$table->duration_human})",
                 'item_type'   => 'service',
@@ -395,12 +397,12 @@ class PoolTableController extends Controller
             // 6.b) Si hay items del POS: crear una línea por producto
             if ($items->isNotEmpty()) {
                 foreach ($items as $it) {
-                    $product = \App\Models\Product::with('unit')->findOrFail($it['product_id']);
+                    $product = Product::with('unit')->findOrFail($it['product_id']);
                     $qty     = (float)$it['qty'];
                     $price   = (float)$it['unit_price'];
                     $unit    = optional($product->unit)->name ?: 'unit';
 
-                    \App\Models\DocumentDetail::create([
+                    DocumentDetail::create([
                         'document_id' => $doc->id,
                         'description' => $product->name,
                         'item_type'   => 'product',
@@ -416,9 +418,9 @@ class PoolTableController extends Controller
             }
             // Si NO hay items y sí hubo consumo simple, mantener tu línea de “Consumo”
             else if ($consumption > 0) {
-                $consServiceId = optional(\App\Models\Service::where('code', 'CONSUMPTION')->first())->id;
+                $consServiceId = optional(Service::where('code', 'CONSUMPTION')->first())->id;
 
-                \App\Models\DocumentDetail::create([
+                DocumentDetail::create([
                     'document_id' => $doc->id,
                     'description' => 'Consumo',
                     'item_type'   => 'service',
@@ -434,7 +436,7 @@ class PoolTableController extends Controller
 
             // 7) Movimiento de caja si fue efectivo
             if ($method === 'cash' && $cashSessionId) {
-                \App\Models\CashMovement::create([
+                CashMovement::create([
                     'cash_session_id' => $cashSessionId,
                     'type'            => 'sale',
                     'amount'          => $doc->total,
@@ -456,14 +458,14 @@ class PoolTableController extends Controller
                     }
 
                     // Stock por almacén (bloqueado)
-                    $ps = \App\Models\ProductStock::where('product_id', $productId)
+                    $ps = ProductStock::where('product_id', $productId)
                         ->where('warehouse_id', $whId)
                         ->lockForUpdate()
                         ->first();
 
                     if (!$ps) {
                         // Si no existe registro de stock, inicializa en 0
-                        $ps = \App\Models\ProductStock::create([
+                        $ps = ProductStock::create([
                             'product_id'   => $productId,
                             'warehouse_id' => $whId,
                             'quantity'     => 0,
@@ -481,13 +483,13 @@ class PoolTableController extends Controller
                     }
 
                     // Obtener costo promedio vigente desde último Kardex o fallback al costo por defecto del producto
-                    $prevKardex = \App\Models\KardexEntry::where('product_id', $productId)
+                    $prevKardex = KardexEntry::where('product_id', $productId)
                         ->where('warehouse_id', $whId)
                         ->orderByDesc('movement_date')
                         ->orderByDesc('id')
                         ->first();
 
-                    $product      = \App\Models\Product::find($productId);
+                    $product      = Product::find($productId);
                     $prevAvgCost  = $prevKardex->balance_avg_unit_cost ?? (float)($product->default_cost_price ?? 0);
                     $prevQty      = (float) $ps->quantity;
 
@@ -501,7 +503,7 @@ class PoolTableController extends Controller
                     $totalCost          = round($unitCost * $qtyOut, 4);  // costo total de la salida
                     $newBalanceTotal    = round($newQty * $prevAvgCost, 4);
 
-                    \App\Models\KardexEntry::create([
+                    KardexEntry::create([
                         'product_id'              => $productId,
                         'warehouse_id'            => $whId,
                         'movement'                => 'out', // SALIDA
@@ -512,7 +514,7 @@ class PoolTableController extends Controller
                         'balance_qty'             => $newQty,
                         'balance_avg_unit_cost'   => $prevAvgCost,
                         'balance_total_cost'      => $newBalanceTotal,
-                        'document_type'           => \App\Models\Document::class,
+                        'document_type'           => Document::class,
                         'document_id'             => $doc->id,
                         'movement_date'           => $now,
                         'reference'               => "NV {$doc->series}-{$doc->number}",
@@ -581,5 +583,78 @@ class PoolTableController extends Controller
 
             return response()->json($table->fresh('status', 'type'));
         });
+    }
+
+    // =================== NUEVO: SUBIR PORTADA ===================
+    /** POST /api/tables/{table}/cover  (campo: image) */
+    public function uploadCover(Request $request, PoolTable $table)
+    {
+        // Log útil para depurar
+        Log::info('allFiles', $request->allFiles()); // te mostrará la(s) llave(s) reales
+
+        // Toma el archivo bajo "image" o, si no existe, la primera entrada de archivos
+        $files = $request->allFiles();
+        $file  = $files['image'] ?? (count($files) ? reset($files) : null);
+
+        // Valida contra una llave normalizada "image"
+        $validator = Validator::make(['image' => $file], [
+            'image' => ['required','image','mimes:jpg,jpeg,png,webp,avif','max:5120'],
+        ], [
+            'image.required' => 'Debes adjuntar una imagen.',
+            'image.image'    => 'El archivo debe ser una imagen.',
+            'image.mimes'    => 'Formatos permitidos: jpg, jpeg, png, webp, avif.',
+            'image.max'      => 'La imagen no debe superar 5MB.',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => $validator->errors()->first(),
+                'input_keys' => array_keys($request->all()), // ayuda a depurar
+            ], 422);
+        }
+
+        $file = $validator->validated()['image'];
+
+        // Carpeta destino (con tenant si aplica)
+        $dir = "tables/{$table->id}";
+        if (function_exists('tenant') && tenant('id')) {
+            $dir = "tenants/".tenant('id')."/tables/{$table->id}";
+        }
+
+        // Guardar públicamente
+        $path = $file->storePublicly($dir, 'public');
+
+        // Borrar anterior si existía
+        if (!empty($table->cover_path) && Storage::disk('public')->exists($table->cover_path)) {
+            Storage::disk('public')->delete($table->cover_path);
+        }
+
+        // Persistir
+        $table->cover_path = $path;
+        $table->save();
+
+        return response()->json([
+            'message' => 'Portada actualizada',
+            'url'     => Storage::disk('public')->url($path),
+            'path'    => $path,
+            'table'   => $table->fresh(['status','type']),
+        ], 201);
+    }
+
+    // =================== NUEVO: ELIMINAR PORTADA ===================
+    /** DELETE /api/tables/{table}/cover */
+    public function destroyCover(PoolTable $table)
+    {
+        if ($table->cover_path && Storage::disk('public')->exists($table->cover_path)) {
+            Storage::disk('public')->delete($table->cover_path);
+        }
+
+        $table->cover_path = null;
+        $table->save();
+
+        return response()->json([
+            'message' => 'Portada eliminada',
+            'table'   => $table->fresh(['status','type']),
+        ]);
     }
 }

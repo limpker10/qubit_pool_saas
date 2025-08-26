@@ -2,9 +2,9 @@
 
 namespace App\Models\Tenant;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Storage;
 
 class PoolTable extends BaseModel
 {
@@ -31,6 +31,7 @@ class PoolTable extends BaseModel
         'rate_per_hour', 'final_seconds', 'final_amount',
     ];
 
+
     protected $casts = [
         'type_id'      => 'integer',    // NUEVO
         'status_id'    => 'integer',
@@ -50,9 +51,17 @@ class PoolTable extends BaseModel
         'duration_human',
         'billable_minutes',
         'amount_now',
+        'cover_url'
     ];
 
     /* --------- Relaciones --------- */
+
+    public function getCoverUrlAttribute(): ?string
+    {
+        return $this->cover_path
+            ? Storage::disk('public')->url($this->cover_path)
+            : null;
+    }
 
     public function status()
     {

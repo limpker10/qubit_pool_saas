@@ -92,9 +92,9 @@
 
         <!-- Contenido -->
         <v-main class="p-2">
-            <div class="pa-5">
+            <v-container fluid>
                 <router-view />
-            </div>
+            </v-container>
         </v-main>
     </v-app>
 </template>

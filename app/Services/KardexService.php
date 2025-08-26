@@ -2,7 +2,10 @@
 // app/Services/KardexService.php
 namespace App\Services;
 
-use App\Models\{KardexEntry, Product, ProductStock, Warehouse};
+use App\Models\Tenant\KardexEntry;
+use App\Models\Tenant\Product;
+use App\Models\Tenant\ProductStock;
+use App\Models\Tenant\Warehouse;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
