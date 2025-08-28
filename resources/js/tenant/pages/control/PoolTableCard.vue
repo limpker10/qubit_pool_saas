@@ -1,6 +1,6 @@
 <template>
     <v-card class="rounded-lg overflow-hidden elevation-2">
-        <!-- Cover (con drag & drop) -->
+
         <div
             class="relative cover-area"
             @dragover.prevent="isDragging = true"
@@ -157,7 +157,11 @@ export default {
     props: {
         table: {type: Object, required: true},
         coverSrc: {type: String, default: '/img/8ball-cover.jpg'},
+        imageField: {type: String, default: 'image'},
+        maxSizeMB: {type: Number, default: 4},
+        cacheBust: {type: Boolean, default: true},
     },
+
     data() {
         return {
             // RELOJ REACTIVO
@@ -185,17 +189,7 @@ export default {
         isInProgress() {
             return this.table?.status?.name === 'in_progress'
         },
-        coverStyle() {
-            // Sutil overlay para legibilidad; ajusta la opacidad si quieres
-            const url = this.displayCover ? `url('${this.displayCover}')` : 'none'
-            return {
-                backgroundImage: `linear-gradient(rgba(0,0,0,.08), rgba(0,0,0,.08)), ${url}`,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-                backgroundRepeat: 'no-repeat',
-                backgroundColor: '#ECEFF1', // fallback cuando no hay imagen
-            }
-        },
+
         statusLabel() {
             const s = this.table?.status?.name
             return s === 'available' ? 'Disponible'
@@ -241,17 +235,25 @@ export default {
             const amount = this.rate * hours
             return Math.round(amount * 100) / 100
         },
-
-        // Portada efectiva
-        displayCover() {
-            return this.table?.cover_url || this.coverSrc
+        coverStyle() {
+            const src = this.table.cover_path;
+            const bg = src ? `url('${src}')` : 'none';
+            return {
+                backgroundImage: `linear-gradient(rgba(0,0,0,.08), rgba(0,0,0,.08)), ${bg}`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+                backgroundColor: '#ECEFF1',
+            };
         },
+
     },
 
     mounted() {
         this.tickerId = setInterval(() => {
             this.nowTs = Date.now()
         }, this.tickMs)
+        console.log(this.table)
         document.addEventListener('visibilitychange', this.onVisibilityChange)
     },
     beforeUnmount() {
@@ -296,11 +298,11 @@ export default {
 
             // Subida
             // if (this.uploadUrl) {
-                this.uploadFile(file).catch(err => {
-                    this.uploadError = err?.message || 'No se pudo subir la imagen.'
-                    // si falla, mantenemos la vista previa local pero no actualizamos URL final
-                    this.$emit('upload-error', {tableId: this.table.id, message: this.uploadError})
-                })
+            this.uploadFile(file).catch(err => {
+                this.uploadError = err?.message || 'No se pudo subir la imagen.'
+                // si falla, mantenemos la vista previa local pero no actualizamos URL final
+                this.$emit('upload-error', {tableId: this.table.id, message: this.uploadError})
+            })
 
         },
         revokeObjectUrl() {
@@ -317,7 +319,8 @@ export default {
 
                 let json = await API.pool_tables.images(this.table.id, fd);
                 console.log(json)
-
+                this.localCover = json.table.cover_path;
+                this.table.cover_path = json.table.cover_path;
 
             } catch (err) {
                 // Mensaje legible

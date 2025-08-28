@@ -589,14 +589,13 @@ class PoolTableController extends Controller
     /** POST /api/tables/{table}/cover  (campo: image) */
     public function uploadCover(Request $request, PoolTable $table)
     {
-        // Log útil para depurar
-        Log::info('allFiles', $request->allFiles()); // te mostrará la(s) llave(s) reales
+        // Log mínimo y seguro
+        Log::info('uploadCover.files', ['keys' => array_keys($request->allFiles())]);
 
-        // Toma el archivo bajo "image" o, si no existe, la primera entrada de archivos
-        $files = $request->allFiles();
-        $file  = $files['image'] ?? (count($files) ? reset($files) : null);
+        // Tomar el archivo bajo "image" o el primero que llegue
+        $file = $request->file('image') ?? collect($request->allFiles())->first();
 
-        // Valida contra una llave normalizada "image"
+        // Validación
         $validator = Validator::make(['image' => $file], [
             'image' => ['required','image','mimes:jpg,jpeg,png,webp,avif','max:5120'],
         ], [
@@ -608,36 +607,36 @@ class PoolTableController extends Controller
 
         if ($validator->fails()) {
             return response()->json([
-                'message' => $validator->errors()->first(),
-                'input_keys' => array_keys($request->all()), // ayuda a depurar
+                'message'    => $validator->errors()->first(),
+                'input_keys' => array_keys($request->all()),
             ], 422);
         }
 
         $file = $validator->validated()['image'];
 
-        // Carpeta destino (con tenant si aplica)
+        // Siempre ruta relativa a app/public del *tenant* (NO anteponer "tenants/...")
         $dir = "tables/{$table->id}";
-        if (function_exists('tenant') && tenant('id')) {
-            $dir = "tenants/".tenant('id')."/tables/{$table->id}";
+
+        // Guardar con visibilidad pública en el disco tenant-aware
+        // storePublicly() genera un nombre hash y crea directorios si faltan
+        $path = $file->storePublicly($dir, 'public'); // p.ej. "tables/1/abc123.jpg"
+
+        // Borrar anterior si existe (limpiando si alguna vez guardaste con "tenants/...").
+        if (!empty($table->cover_path)) {
+            $old = preg_replace('#^tenants/[^/]+/#', '', $table->cover_path);
+            if ($old && Storage::disk('public')->exists($old)) {
+                Storage::disk('public')->delete($old);
+            }
         }
 
-        // Guardar públicamente
-        $path = $file->storePublicly($dir, 'public');
-
-        // Borrar anterior si existía
-        if (!empty($table->cover_path) && Storage::disk('public')->exists($table->cover_path)) {
-            Storage::disk('public')->delete($table->cover_path);
-        }
-
-        // Persistir
-        $table->cover_path = $path;
+        $coverUrl = tenant_asset($path);
+        $table->cover_path = $coverUrl;
         $table->save();
 
         return response()->json([
-            'message' => 'Portada actualizada',
-            'url'     => Storage::disk('public')->url($path),
-            'path'    => $path,
-            'table'   => $table->fresh(['status','type']),
+            'message'     => 'Portada actualizada',
+            'cover_path'  => $path,
+            'table'       => $table->fresh(['status','type']),
         ], 201);
     }
 

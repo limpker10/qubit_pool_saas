@@ -17,7 +17,9 @@
             <v-col v-for="t in tables" :key="t.id" cols="12" sm="6" md="4" lg="3">
                 <PoolTableCard
                     :table="t"
-                    :image-field="'image'" :max-size-m-b="4" :cache-bust="true"
+                    :image-field="'image'"
+                    :max-size-m-b="4"
+                    :cache-bust="true"
 
                     @start="startTable"
                     @finish="openFinish"
