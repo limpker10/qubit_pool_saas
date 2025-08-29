@@ -188,4 +188,49 @@ class TableRental extends BaseModel
 
         return $this;
     }
+
+    public function items()
+    {
+        return $this->hasMany(TableRentalItem::class, 'table_rental_id')
+            ->where('status','ok'); // por defecto sólo vigentes
+    }
+
+    public function itemsAll() // incluye anulados
+    {
+        return $this->hasMany(TableRentalItem::class, 'table_rental_id');
+    }
+
+    /**
+     * Recalcula consumption y total (sin tocar amount_time).
+     * Úsalo después de agregar/editar/anular ítems.
+     */
+    public function recalcTotals(bool $save = true): self
+    {
+        $consumption = $this->itemsAll()
+            ->where('status','ok')
+            ->sum('total');
+
+        $this->consumption = round((float) $consumption, 2);
+        $this->total = round((float) $this->amount_time + $this->consumption - (float) $this->discount + (float) $this->surcharge, 2);
+
+        if ($save) $this->save();
+
+        // sincróniza el snapshot en la mesa
+        if ($this->relationLoaded('table')) {
+            $table = $this->table;
+        } else {
+            $table = PoolTable::find($this->table_id);
+        }
+        if ($table) {
+            $table->consumption = $this->consumption;
+            $table->save();
+        }
+        return $this;
+    }
+
+    /** Scope útil */
+    public function scopeOpenForTable($q, int $tableId)
+    {
+        return $q->where('table_id', $tableId)->where('status', 'open');
+    }
 }

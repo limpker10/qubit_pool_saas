@@ -3,6 +3,7 @@
 namespace App\Models\Tenant;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 
@@ -181,5 +182,19 @@ class PoolTable extends BaseModel
     {
         if (!$this->start_time) return null;
         return number_format($this->computeAmount(), 2, '.', '');
+    }
+    public function rentals()
+    {
+        return $this->hasMany(TableRental::class, 'table_id');
+    }
+
+    /**
+     * Alquiler abierto más reciente (si existe).
+     * - Usa ofMany para elegir el de mayor started_at (y id como desempate).
+     */
+    public function activeRental(): HasOne
+    {
+        return $this->hasOne(TableRental::class, 'table_id')
+            ->where('table_rentals.status', TableRental::ST_OPEN);
     }
 }

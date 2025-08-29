@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Tenant\TableRentalController;
+use App\Http\Controllers\Tenant\TableRentalItemController;
 use Illuminate\Support\Facades\Route;
 
 use App\Http\Controllers\Tenant\AuthController;
@@ -24,6 +26,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('warehouses', WarehouseController::class);
     Route::apiResource('tables', PoolTableController::class);
     Route::apiResource('table_types', TableTypeController::class);
+    Route::apiResource('table_rentals', TableRentalController::class);
 
     Route::get('me', [AuthController::class, 'me']);
     Route::post('logout', [AuthController::class, 'logout']);
@@ -50,4 +53,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('tables/{table}/cover', [PoolTableController::class, 'uploadCover']);
     Route::delete('tables/{table}/cover', [PoolTableController::class, 'destroyCover']);
+
+    // Listar ítems de un alquiler
+    Route::get('rental_items/{rental}/items', [TableRentalItemController::class, 'index']);
+
+    // Crear varios ítems de golpe (desde POS "confirm")
+    Route::post('rental_items/{rental}/items/bulk', [TableRentalItemController::class, 'storeBulk']);
+
+    // CRUD de un ítem individual
+    Route::post('rental_items/{rental}/items', [TableRentalItemController::class, 'store']);
+    Route::put('rental_items/items/{item}',   [TableRentalItemController::class, 'update']);
+    Route::delete('rental_items/items/{item}',[TableRentalItemController::class, 'destroy']); // anula/void
 });

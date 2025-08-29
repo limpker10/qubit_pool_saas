@@ -213,9 +213,7 @@
 </template>
 
 <script>
-import axios from 'axios';
-import API from "@/services/index.js";
-
+import API from "@/tenant/services/index.js";
 export default {
     name: 'CashSessionList',
     data() {

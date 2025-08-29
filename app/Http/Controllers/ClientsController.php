@@ -205,6 +205,7 @@ class ClientsController extends Controller
                     'email'             => $validated['email'],
                     'password'          => Hash::make($adminPassword),
                     'email_verified_at' => now(),
+                    'warehouse_id'      => 1,
                 ]);
 
                 // Si usas Spatie:

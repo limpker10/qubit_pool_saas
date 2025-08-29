@@ -6,7 +6,10 @@ use App\Models\Tenant\CashMovement;
 use App\Models\Tenant\CashSession;
 use App\Models\Tenant\Document;
 use App\Models\Tenant\DocumentDetail;
+use App\Models\Tenant\KardexEntry;
 use App\Models\Tenant\PoolTable;
+use App\Models\Tenant\Product;
+use App\Models\Tenant\ProductStock;
 use App\Models\Tenant\Service;
 use App\Models\Tenant\TableRental;
 use Illuminate\Http\Request;
@@ -15,25 +18,52 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
+use Throwable;
+
 class PoolTableController extends Controller
 {
     /** GET /api/tables */
     public function index(Request $request)
     {
-        $status  = $request->query('status');   // in_progress|paused|completed|cancelled|available
-        $number  = $request->query('number');   // exacto
-        $perPage = (int) $request->query('per_page', 15);
+        $status     = $request->query('status');     // in_progress|paused|completed|cancelled|available
+        $number     = $request->query('number');     // exacto
+        $perPage    = (int) $request->query('per_page', 15);
+        $withItems  = filter_var($request->query('with_items', false), FILTER_VALIDATE_BOOLEAN);
 
         $items = PoolTable::query()
-            ->with('status', 'type')
-            ->statusName($status)
-            ->number($number)
+            ->with([
+                'status',
+                'type',
+                'activeRental' => function ($q) use ($withItems) {
+                    // Selecciona solo columnas necesarias del rental
+                    $q->select('id','table_id','started_at','ended_at','rate_per_hour',
+                        'amount_time','consumption','discount','surcharge','total','status','created_at');
+
+                    // Si piden items, cárgalos (solo vigentes)
+                    if ($withItems) {
+                        $q->with([
+                            'items' => function ($qi) {
+                                $qi->select('id','table_rental_id','product_id','product_name','unit_id','unit_name',
+                                    'qty','unit_price','discount','total','status','created_at')
+                                    ->where('status','ok')
+                                    ->orderBy('id','asc');
+                            }
+                        ])->withCount([
+                            'items as items_count' => function ($qc) {
+                                $qc->where('status','ok');
+                            }
+                        ]);
+                    }
+                },
+            ])
+            ->statusName($status) // asumes que ya existe el scope
+            ->number($number)     // asumes que ya existe el scope
             ->orderBy('number')
             ->paginate($perPage);
 
         return response()->json($items);
     }
-
     /** POST /api/tables */
     public function store(Request $request)
     {
@@ -243,80 +273,91 @@ class PoolTableController extends Controller
     }
 
     /** POST /api/tables/{table}/finish */
-    /** POST /api/tables/{table}/finish */
     public function finish(PoolTable $table, Request $request)
     {
-        \Illuminate\Support\Facades\Log::info($request->all());
-
-        // 👉 Validación extendida para POS de productos
+        // 1) Validación (incluye rental_id)
         $data = $request->validate([
-            'consumption'     => ['nullable', 'numeric', 'min:0'],
-            'payment_method'  => ['required', 'in:cash,card,transfer,other'],
-            'rate_per_hour'   => ['nullable', 'numeric', 'min:0'],
-            'discount'        => ['nullable', 'numeric', 'min:0'],
-            'surcharge'       => ['nullable', 'numeric', 'min:0'],
+            'rental_id'        => ['required','integer','exists:table_rentals,id'],
+            'consumption'      => ['nullable','numeric','min:0'],
+            'payment_method'   => ['required','in:cash,card,transfer,other'],
+            'rate_per_hour'    => ['nullable','numeric','min:0'],
+            'discount'         => ['nullable','numeric','min:0'],
+            'surcharge'        => ['nullable','numeric','min:0'],
 
-            // Detalle POS (opcional). Si viene, se usará en lugar de "consumption" simple.
-            'items'                   => ['sometimes','array'],
-            'items.*.product_id'      => ['required_with:items','integer','exists:products,id'],
-            'items.*.qty'             => ['required_with:items','numeric','min:1'],
-            'items.*.unit_price'      => ['required_with:items','numeric','min:0'],
-            'items.*.warehouse_id'    => ['nullable','integer','exists:warehouses,id'],
+            // opcional: si mandas items en el cierre, los uso en vez de leer del rental
+            'items'                => ['sometimes','array'],
+            'items.*.product_id'   => ['required_with:items','integer','exists:products,id'],
+            'items.*.qty'          => ['required_with:items','numeric','min:1'],
+            'items.*.unit_price'   => ['required_with:items','numeric','min:0'],
+            'items.*.warehouse_id' => ['nullable','integer','exists:warehouses,id'],
 
-            // Almacén global (opcional si cada item trae su warehouse_id)
-            'warehouse_id'            => ['nullable','integer','exists:warehouses,id'],
-
-            // Permite saldo negativo si es true
-            'allow_negative_stock'    => ['sometimes','boolean'],
+            // almacén global por si las líneas no traen warehouse_id
+            'warehouse_id'         => ['nullable','integer','exists:warehouses,id'],
+            'allow_negative_stock' => ['sometimes','boolean'],
         ]);
 
-        $items = collect($request->input('items', []));
-        $globalWarehouseId  = $request->integer('warehouse_id') ?: null;
-        $allowNegativeStock = $request->boolean('allow_negative_stock', false);
+        // 👇 NEW: tomar warehouse por defecto del usuario (Sanctum) si no viene en el request
+        $userWarehouseId  = auth('sanctum')->user()->warehouse_id;  // <- requiere columna en users
+        $globalWarehouseId = $request->integer('warehouse_id') ?: ($userWarehouseId ?: null);
 
-        return DB::transaction(function () use ($table, $data, $items, $globalWarehouseId, $allowNegativeStock) {
-            // Relee y bloquea la mesa
-            $table = PoolTable::whereKey($table->getKey())->lockForUpdate()->firstOrFail();
+        $allowNegativeStock = (bool) $request->boolean('allow_negative_stock', false);
 
-            // Debe existir un alquiler abierto
-            $rental = TableRental::where('table_id', $table->id)
-                ->where('status', 'open')
-                ->lockForUpdate()
-                ->first();
+        DB::beginTransaction();
+        try {
+            // 2) Releer mesa y rental con lock
+            $table  = PoolTable::whereKey($table->getKey())->lockForUpdate()->firstOrFail();
 
-            if (!$rental) {
-                return response()->json(['message' => 'No existe un alquiler abierto para esta mesa'], 409);
+            /** @var TableRental $rental */
+            $rental = TableRental::whereKey($data['rental_id'])->lockForUpdate()->firstOrFail();
+
+            if ($rental->table_id !== $table->id) {
+                throw ValidationException::withMessages([
+                    'rental_id' => ['El alquiler no pertenece a esta mesa.'],
+                ]);
+            }
+            if ($rental->status !== TableRental::ST_OPEN) {
+                throw ValidationException::withMessages([
+                    'rental_id' => ['El alquiler no está abierto.'],
+                ]);
             }
 
             $now = now();
 
-            // 1) Cerrar tiempos y calcular importes de tiempo
+            // 3) Tiempos
             $table->end_time = $now;
-
-            if (isset($data['rate_per_hour'])) {
+            if (array_key_exists('rate_per_hour', $data) && $data['rate_per_hour'] !== null) {
                 $table->rate_per_hour = (float) $data['rate_per_hour'];
             }
-
             $billableMins = $table->computeBillableMinutes($now, PoolTable::ROUND_BLOCK_MIN);
             $amountTime   = $table->computeAmount($now, PoolTable::ROUND_BLOCK_MIN); // solo tiempo
-
-            if (method_exists($table, 'isFillable') && $table->isFillable('final_seconds')) $table->final_seconds = $billableMins * 60;
-            if (method_exists($table, 'isFillable') && $table->isFillable('final_amount'))  $table->final_amount  = $amountTime;
-
             $table->amount = $amountTime;
 
-            // 1.a) Consumo: si vienen "items" (POS), sobreescribe consumo con la suma de líneas
-            $consumptionFromItems = 0.0;
-            if ($items->isNotEmpty()) {
-                $consumptionFromItems = round($items->sum(fn ($i) => (float)$i['qty'] * (float)$i['unit_price']), 2);
-                $table->consumption   = $consumptionFromItems;
-            } else {
-                if (array_key_exists('consumption', $data) && $data['consumption'] !== null) {
-                    $table->consumption = (float) $data['consumption'];
-                }
+            // 4) Ítems a facturar/sacar de stock
+            $incomingItems = collect($request->input('items', []));
+            if ($incomingItems->isEmpty()) {
+                // Tomar lo guardado en el rental (status=ok)
+                $incomingItems = $rental->itemsAll()
+                    ->where('status','ok')
+                    ->get(['product_id','qty','unit_price'])
+                    ->map(function ($i) use ($globalWarehouseId) {
+                        return [
+                            'product_id'   => (int) $i->product_id,
+                            'qty'          => (float) $i->qty,
+                            'unit_price'   => (float) $i->unit_price,
+                            'warehouse_id' => $globalWarehouseId, // se puede sobreescribir si pasas uno global
+                        ];
+                    });
             }
 
-            // 1.b) Actualizar Rental con foto final
+            // 4.a) Calcular consumo desde items si hay; si no, usar "consumption" simple
+            if ($incomingItems->isNotEmpty()) {
+                $consumptionFromItems = round($incomingItems->sum(fn($i) => (float)$i['qty'] * (float)$i['unit_price']), 2);
+                $table->consumption   = $consumptionFromItems;
+            } else {
+                $table->consumption   = (float) ($data['consumption'] ?? 0);
+            }
+
+            // 5) Cerrar rental (foto final)
             $rental->ended_at        = $now;
             $rental->elapsed_seconds = $rental->started_at ? $rental->started_at->diffInSeconds($now) : ($billableMins * 60);
             $rental->rate_per_hour   = (float) ($data['rate_per_hour'] ?? $table->rate_per_hour ?? $rental->rate_per_hour ?? 0);
@@ -325,40 +366,34 @@ class PoolTableController extends Controller
             $rental->discount        = (float) ($data['discount']  ?? 0);
             $rental->surcharge       = (float) ($data['surcharge'] ?? 0);
             $rental->total           = round($rental->amount_time + $rental->consumption - $rental->discount + $rental->surcharge, 2);
-            $rental->status          = 'closed';
+            $rental->status          = TableRental::ST_CLOSED;
             $rental->save();
 
-            // 1.c) Dejar mesa disponible nuevamente
+            // 6) Mesa disponible
             $table->setStatusByName(PoolTable::ST_AVAILABLE);
             $table->save();
 
-            // 2) Totales para el documento
-            $serviceTotal = $rental->amount_time;           // tiempo
-            $consumption  = (float) $rental->consumption;   // consumo (de items o simple)
-            $docTotal     = round($serviceTotal + $consumption, 2);
-
-            // 3) Validar caja abierta si pago cash
+            // 7) Caja (si efectivo)
             $method        = $data['payment_method'];
             $cashSessionId = null;
-
             if ($method === 'cash') {
                 $session = CashSession::currentFor(auth()->id());
                 if (!$session) {
-                    return response()->json(['message' => 'Debes abrir caja antes de cobrar en efectivo'], 422);
+                    throw ValidationException::withMessages([
+                        'payment_method' => ['Debes abrir caja antes de cobrar en efectivo.']
+                    ]);
                 }
                 $cashSessionId = $session->id;
             }
 
-            // 4) Correlativo de Nota de Venta
+            // 8) Documento
             $series     = 'NV01';
-            $lastNumber = Document::where('type', 'sale_note')
-                ->where('series', $series)
-                ->lockForUpdate()
-                ->orderByDesc('number')
-                ->value('number') ?? 0;
+            $lastNumber = Document::where('type','sale_note')->where('series',$series)->lockForUpdate()->orderByDesc('number')->value('number') ?? 0;
             $nextNumber = $lastNumber + 1;
 
-            // 5) Crear documento (Nota de Venta)
+            // total documento = total del rental (tiempo + consumo - desc + recargo)
+            $docTotal = $rental->total;
+
             $doc = Document::create([
                 'type'            => 'sale_note',
                 'series'          => $series,
@@ -375,31 +410,32 @@ class PoolTableController extends Controller
                     'pool_table' => $table->number,
                     'duration'   => $table->duration_human,
                     'rental_id'  => $rental->id,
+                    'discount'   => $rental->discount,
+                    'surcharge'  => $rental->surcharge,
                 ],
             ]);
 
-            // 6) Detalles del documento
-            $serviceId = optional(Service::where('code', 'POOL_TIME')->first())->id;
-
+            // 8.a) Detalle: TIEMPO
+            $serviceId = optional(Service::where('code','POOL_TIME')->first())->id;
             DocumentDetail::create([
                 'document_id' => $doc->id,
                 'description' => "Alquiler mesa #{$table->number} ({$table->duration_human})",
                 'item_type'   => 'service',
                 'item_id'     => $serviceId,
-                'quantity'    => round($billableMins / 60, 3), // horas
+                'quantity'    => round($billableMins / 60, 3),
                 'unit'        => 'hour',
                 'unit_price'  => (float) ($table->rate_per_hour ?? 0),
-                'line_total'  => $serviceTotal,
+                'line_total'  => $rental->amount_time,
                 'tax'         => 0,
                 'discount'    => 0,
             ]);
 
-            // 6.b) Si hay items del POS: crear una línea por producto
-            if ($items->isNotEmpty()) {
-                foreach ($items as $it) {
+            // 8.b) Detalle: CONSUMO
+            if ($incomingItems->isNotEmpty()) {
+                foreach ($incomingItems as $it) {
                     $product = Product::with('unit')->findOrFail($it['product_id']);
-                    $qty     = (float)$it['qty'];
-                    $price   = (float)$it['unit_price'];
+                    $qty     = (float) $it['qty'];
+                    $price   = (float) $it['unit_price'];
                     $unit    = optional($product->unit)->name ?: 'unit';
 
                     DocumentDetail::create([
@@ -415,11 +451,8 @@ class PoolTableController extends Controller
                         'discount'    => 0,
                     ]);
                 }
-            }
-            // Si NO hay items y sí hubo consumo simple, mantener tu línea de “Consumo”
-            else if ($consumption > 0) {
-                $consServiceId = optional(Service::where('code', 'CONSUMPTION')->first())->id;
-
+            } elseif ($rental->consumption > 0) {
+                $consServiceId = optional(Service::where('code','CONSUMPTION')->first())->id;
                 DocumentDetail::create([
                     'document_id' => $doc->id,
                     'description' => 'Consumo',
@@ -427,14 +460,14 @@ class PoolTableController extends Controller
                     'item_id'     => $consServiceId,
                     'quantity'    => 1,
                     'unit'        => 'unit',
-                    'unit_price'  => $consumption,
-                    'line_total'  => $consumption,
+                    'unit_price'  => $rental->consumption,
+                    'line_total'  => $rental->consumption,
                     'tax'         => 0,
                     'discount'    => 0,
                 ]);
             }
 
-            // 7) Movimiento de caja si fue efectivo
+            // 9) Movimiento de caja
             if ($method === 'cash' && $cashSessionId) {
                 CashMovement::create([
                     'cash_session_id' => $cashSessionId,
@@ -446,25 +479,26 @@ class PoolTableController extends Controller
                 ]);
             }
 
-            // 7.b) 👉👉 KARDEX + STOCK por ítem (solo si vinieron items)
-            if ($items->isNotEmpty()) {
-                foreach ($items as $it) {
-                    $productId = (int)$it['product_id'];
-                    $qtyOut    = (float)$it['qty'];
+            // 10) STOCK + KARDEX por ítem (si hubo líneas)
+            if ($incomingItems->isNotEmpty()) {
+                foreach ($incomingItems as $it) {
+                    $productId = (int) $it['product_id'];
+                    $qtyOut    = (float) $it['qty'];
                     $whId      = $it['warehouse_id'] ?? $globalWarehouseId;
 
                     if (!$whId) {
-                        return response()->json(['message' => "warehouse_id requerido para el producto {$productId}"], 422);
+                        throw ValidationException::withMessages([
+                            'warehouse_id' => ["warehouse_id requerido para el producto {$productId}."]
+                        ]);
                     }
 
-                    // Stock por almacén (bloqueado)
+                    // Stock por almacén (lock)
                     $ps = ProductStock::where('product_id', $productId)
                         ->where('warehouse_id', $whId)
                         ->lockForUpdate()
                         ->first();
 
                     if (!$ps) {
-                        // Si no existe registro de stock, inicializa en 0
                         $ps = ProductStock::create([
                             'product_id'   => $productId,
                             'warehouse_id' => $whId,
@@ -472,74 +506,83 @@ class PoolTableController extends Controller
                         ]);
                     }
 
-                    // Validar stock suficiente (opcional)
                     if (!$allowNegativeStock && (float)$ps->quantity < $qtyOut) {
-                        return response()->json([
-                            'message' => 'Stock insuficiente para salida',
-                            'errors'  => [
-                                'items' => ["Producto ID {$productId}: stock {$ps->quantity} < salida {$qtyOut}"]
-                            ],
-                        ], 422);
+                        throw ValidationException::withMessages([
+                            'items' => ["Producto ID {$productId}: stock {$ps->quantity} insuficiente para salida {$qtyOut}."]
+                        ]);
                     }
 
-                    // Obtener costo promedio vigente desde último Kardex o fallback al costo por defecto del producto
+                    // Costo promedio vigente
                     $prevKardex = KardexEntry::where('product_id', $productId)
                         ->where('warehouse_id', $whId)
                         ->orderByDesc('movement_date')
                         ->orderByDesc('id')
                         ->first();
 
-                    $product      = Product::find($productId);
-                    $prevAvgCost  = $prevKardex->balance_avg_unit_cost ?? (float)($product->default_cost_price ?? 0);
-                    $prevQty      = (float) $ps->quantity;
+                    $product     = Product::find($productId);
+                    $prevAvgCost = $prevKardex->balance_avg_unit_cost ?? (float) ($product->default_cost_price ?? 0);
+                    $prevQty     = (float) $ps->quantity;
 
-                    // Actualizar stock
+                    // Actualiza stock
                     $newQty = $prevQty - $qtyOut;
                     $ps->quantity = $newQty;
                     $ps->save();
 
-                    // Registrar SALIDA en Kardex (costo promedio no cambia en salida)
-                    $unitCost           = $prevAvgCost;                  // costo usado para valorar la salida
-                    $totalCost          = round($unitCost * $qtyOut, 4);  // costo total de la salida
-                    $newBalanceTotal    = round($newQty * $prevAvgCost, 4);
+                    // Kardex SALIDA
+                    $unitCost         = $prevAvgCost;
+                    $totalCost        = round($unitCost * $qtyOut, 4);
+                    $newBalanceTotal  = round($newQty * $prevAvgCost, 4);
 
                     KardexEntry::create([
-                        'product_id'              => $productId,
-                        'warehouse_id'            => $whId,
-                        'movement'                => 'out', // SALIDA
-                        'quantity_in'             => 0,
-                        'quantity_out'            => $qtyOut,
-                        'unit_cost'               => $unitCost,
-                        'total_cost'              => $totalCost,
-                        'balance_qty'             => $newQty,
-                        'balance_avg_unit_cost'   => $prevAvgCost,
-                        'balance_total_cost'      => $newBalanceTotal,
-                        'document_type'           => Document::class,
-                        'document_id'             => $doc->id,
-                        'movement_date'           => $now,
-                        'reference'               => "NV {$doc->series}-{$doc->number}",
-                        'description'             => "Salida por consumo mesa #{$table->number}",
-                        'created_by'              => auth()->id(),
+                        'product_id'            => $productId,
+                        'warehouse_id'          => $whId,
+                        'movement'              => 'salida',
+                        'quantity_in'           => 0,
+                        'quantity_out'          => $qtyOut,
+                        'unit_cost'             => $unitCost,
+                        'total_cost'            => $totalCost,
+                        'balance_qty'           => $newQty,
+                        'balance_avg_unit_cost' => $prevAvgCost,
+                        'balance_total_cost'    => $newBalanceTotal,
+                        'document_type'         => Document::class,
+                        'document_id'           => $doc->id,
+                        'movement_date'         => $now,
+                        'reference'             => "NV {$doc->series}-{$doc->number}",
+                        'description'           => "Salida por consumo mesa #{$table->number}",
+                        'created_by'            => auth()->id(),
                     ]);
                 }
             }
 
-            // 8) Respuesta
-            $table->load('status', 'type');
+            // 11) Respuesta
+            $table->load('status','type');
+            DB::commit();
 
             return response()->json([
                 'table'    => $table,
-                'rental'   => $rental,
+                'rental'   => $rental->fresh(),
                 'document' => [
-                    'id'              => $doc->id,
-                    'series'          => $doc->series,
-                    'number'          => $doc->number,
-                    'total'           => $doc->total,
+                    'id'     => $doc->id,
+                    'series' => $doc->series,
+                    'number' => $doc->number,
+                    'total'  => $doc->total,
                     'payment_method'  => $doc->payment_method,
                     'cash_session_id' => $doc->cash_session_id,
                 ],
             ]);
-        });
+        } catch (Throwable $e) {
+            DB::rollBack();
+            report($e);
+
+            if ($e instanceof ValidationException) {
+                throw $e; // 422 con mensajes y rollback
+            }
+
+            return response()->json([
+                'message' => 'No se pudo finalizar la mesa',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
     }
 
 

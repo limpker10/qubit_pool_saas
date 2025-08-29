@@ -191,7 +191,7 @@
 </template>
 
 <script>
-import API from "@/services/index.js";
+import API from "@/tenant/services/index.js";
 
 export default {
     name: 'CashSessionPanel',
@@ -273,7 +273,6 @@ export default {
         async reload() {
             try {
                 this.loading = true;
-                // const { data } = await axios.get('/api/cash-sessions/current');
                 const response = await API.cash_sessions.current();
                 console.log(response)
                 this.session = response?.session || null;
@@ -282,6 +281,7 @@ export default {
                     this.openingCash = Number(this.session.opening_cash || 0);
                 }
             } catch (e) {
+                console.log(e)
                 this.toast(e?.response?.data?.message || 'No se pudo cargar la caja', 'error');
             } finally {
                 this.loading = false;

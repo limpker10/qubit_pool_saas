@@ -79,7 +79,18 @@ const PATHS = {
         DELETE: (id) => `api/tables/${id}`,   // DELETE: eliminar cliente
         START: (id) => `api/tables/${id}/start`,   // DELETE: eliminar cliente
         FINISH: (id) => `api/tables/${id}/finish`,   // DELETE: eliminar cliente
-        IMAGE:  (id) => `api/tables/${id}/cover`,   // DELETE: eliminar cliente
+        IMAGE:  (id) => `api/tables/${id}/cover`,
+    },
+    table_rentals: {
+        LIST: 'api/table_rentals/',                   // GET: listar clientes
+        CREATE: 'api/table_rentals',                // POST: crear cliente
+        SHOW: (id) => `api/table_rentals/${id}`,     // GET: detalle de cliente
+        UPDATE: (id) => `api/table_rentals/${id}`,   // PUT/PATCH: actualizar cliente
+        DELETE: (id) => `api/table_rentals/${id}`,   // DELETE: eliminar cliente
+    },
+    rental_items: {
+        LIST: (id) => `api/rental_items/${id}/items`,     // GET: detalle de cliente
+        BULK: (id) => `api/rental_items/${id}/items/bulk`,     // POS: rental_items/{rental}/items/bulk
     },
 };
 

@@ -153,6 +153,32 @@ const API = {
             return callAPI('post', PATHS.pool_tables.IMAGE(id),{data, isMultipart: isFormData});
         },
     },
+    table_rentals: {
+        list(params) {
+            return callAPI('get', PATHS.table_rentals.LIST, {data: params});
+        },
+        create(data) {
+            return callAPI('post', PATHS.table_rentals.CREATE, {data});
+        },
+        update(id, data) {
+            return callAPI('put', PATHS.table_rentals.UPDATE(id), {data});
+        },
+        delete(id) {
+            return callAPI('delete', PATHS.table_rentals.DELETE(id));
+        },
+        items(params) {
+            return callAPI('get', PATHS.rental_items.LIST, {data: params});
+        },
+    },
+    rental_items: {
+        list(id) {
+            return callAPI('get', PATHS.rental_items.LIST(id));
+        },
+        items_bulk(id, data) {
+            return callAPI('post', PATHS.rental_items.BULK(id), {data});
+        },
+
+    },
 };
 
 export default API;

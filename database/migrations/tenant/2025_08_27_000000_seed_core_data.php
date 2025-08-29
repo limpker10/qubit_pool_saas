@@ -55,10 +55,6 @@ return new class extends Migration
             ['code' => 'PRINC'],
             ['code'=>'PRINC','name'=>'Principal','address'=>'Local central','created_at'=>$now,'updated_at'=>$now]
         );
-        DB::table('warehouses')->updateOrInsert(
-            ['code' => 'BAR'],
-            ['code'=>'BAR','name'=>'Bar','address'=>'Barra','created_at'=>$now,'updated_at'=>$now]
-        );
 
         // =========================
         // 5) PRODUCTOS DE EJEMPLO + STOCK (solo si no hay productos)
@@ -120,6 +116,7 @@ return new class extends Migration
                         'created_at' => $now, 'updated_at' => $now
                     ]
                 );
+
             }
         }
     }

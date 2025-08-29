@@ -68,7 +68,7 @@
                 <v-btn icon size="small" variant="elevated" color="warning" @click.stop="onCancel">
                     <v-icon>mdi-cancel</v-icon>
                 </v-btn>
-                <v-btn icon size="small" variant="elevated" color="primary" @click.stop="openPOS(table)">
+                <v-btn icon size="small" variant="elevated" color="primary"  @click="$emit('open-pos', table)">
                     <v-icon>mdi-food-fork-drink</v-icon>
                 </v-btn>
             </div>
@@ -138,22 +138,15 @@
             </v-btn>
         </v-card-actions>
 
-        <!-- POS Consumo -->
-        <ConsumptionPOSDialog
-            v-model="dialogs.pos"
-            :table-number="current?.number"
-            @confirm="onPosConfirm"
-        />
+
     </v-card>
 </template>
 
 <script>
-import ConsumptionPOSDialog from "@/tenant/pages/control/ConsumptionPOSDialog.vue";
 import API from "@/tenant/services/index.js";
 
 export default {
     name: 'PoolTableCard',
-    components: {ConsumptionPOSDialog},
     props: {
         table: {type: Object, required: true},
         coverSrc: {type: String, default: '/img/8ball-cover.jpg'},
@@ -169,7 +162,6 @@ export default {
             tickerId: null,
             tickMs: 1000,
 
-            dialogs: {finish: false, pos: false},
             current: null,
             finishForm: {consumption: 0, payment_method: 'cash', rate_per_hour: null, discount: 0, surcharge: 0},
             posItems: [],
@@ -372,16 +364,6 @@ export default {
             this.$emit('edit', this.table)
         },
 
-        openPOS(table) {
-            this.current = table
-            this.dialogs.pos = true
-        },
-        onPosConfirm({items, total}) {
-            this.posItems = items
-            this.table.consumption = total
-            this.finishForm.consumption = total
-            this.$emit('update-consumption', {tableId: this.table.id, total, items})
-        }
     },
 }
 </script>

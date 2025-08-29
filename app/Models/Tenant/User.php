@@ -23,6 +23,7 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'warehouse_id'
     ];
 
     /**
@@ -46,5 +47,12 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    // app/Models/User.php
+    public function warehouse()
+    {
+        return $this->belongsTo(\App\Models\Tenant\Warehouse::class, 'warehouse_id');
+        // ajusta el namespace según dónde tengas Warehouse
     }
 }
